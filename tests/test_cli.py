@@ -59,8 +59,9 @@ def test_cli_empty_text_nonzero() -> None:
     assert out == ""
 
 
-def test_cli_missing_file() -> None:
-    code, _, err = _run(["analyze", "--file", "/no/such/file-scamsentry.txt"])
+def test_cli_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "no_such_file_scamsentry.txt"
+    code, _, err = _run(["analyze", "--file", str(missing)])
     assert code == 1
     assert "not found" in err.lower() or "error:" in err
 
@@ -71,6 +72,30 @@ def test_cli_json_input_error() -> None:
     assert "error:" in err
     payload = json.loads(out)
     assert payload["analysis_status"] == "input_error"
+
+
+def test_cli_file_path_with_spaces_and_unicode(tmp_path: Path) -> None:
+    folder = tmp_path / "scam reports 2026" / "dossier été"
+    folder.mkdir(parents=True)
+    msg_file = folder / "message à vérifier.txt"
+    msg_file.write_text("Hello team, just checking in.", encoding="utf-8")
+    code, out, err = _run(["analyze", "--file", str(msg_file)])
+    assert code == 0
+    assert "LOW_CONCERN" in out
+    assert err == ""
+
+
+def test_cli_module_help() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "scamsentry.cli", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert "usage:" in proc.stdout
+    assert "analyze" in proc.stdout
 
 
 def test_cli_module_entrypoint() -> None:

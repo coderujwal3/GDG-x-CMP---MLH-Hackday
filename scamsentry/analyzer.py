@@ -184,6 +184,8 @@ def analyse_file(
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> AnalysisResult:
     file_path = Path(path)
+    if file_path.is_dir():
+        raise InputError(f"Path is a directory, not a file: {file_path}")
     try:
         size = file_path.stat().st_size
     except FileNotFoundError as exc:

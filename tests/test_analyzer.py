@@ -177,3 +177,44 @@ def test_analyse_message_type_validation() -> None:
     with pytest.raises(InputError, match="string"):
         analyse_message(12345)  # type: ignore[arg-type]
 
+
+def test_analyse_file_with_spaces_and_non_ascii_paths(tmp_path: Path) -> None:
+    folder = tmp_path / "cas d'analyse 2026" / "dossier_sécurité"
+    folder.mkdir(parents=True)
+    file_path = folder / "alerte_bancaire_#1.txt"
+    file_path.write_text(
+        "This is Amazon Security. Enter your password immediately: https://example.com/login",
+        encoding="utf-8",
+    )
+    result = analyse_file(file_path)
+    assert result.analysis_status is AnalysisStatus.COMPLETE
+    assert result.risk_band is RiskBand.HIGH_CONCERN
+    assert result.finding_count >= 2
+
+
+def test_crlf_message_analysis() -> None:
+    windows_crlf_text = (
+        "This is Amazon Security.\r\n"
+        "Your account will be suspended within 24 hours unless you verify.\r\n"
+        "Enter your password now: http://192.0.2.1/login\r\n"
+    )
+    result = analyse_message(windows_crlf_text)
+    assert result.analysis_status is AnalysisStatus.COMPLETE
+    assert result.risk_band is RiskBand.HIGH_CONCERN
+    # Offsets quote exact slices of windows_crlf_text
+    for finding in result.findings:
+        if finding.start_offset is not None and finding.end_offset is not None:
+            assert windows_crlf_text[finding.start_offset : finding.end_offset] == finding.evidence_text
+
+
+def test_stability_across_repeated_runs() -> None:
+    text = (
+        "This is PayPal support. Your account has been locked. "
+        "Verify your password at once: http://192.0.2.1/verify"
+    )
+    reference = analyse_message(text).to_dict()
+    for _ in range(10):
+        run_result = analyse_message(text).to_dict()
+        assert run_result == reference
+
+

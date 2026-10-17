@@ -6,44 +6,68 @@ Stage 1 is independent of every LLM provider. Stage 2 can add a local open-weigh
 
 This is a **prototype**, not a substitute for security verification, fraud investigation, or incident response.
 
-## Requirements
+## Requirements & Supported Platforms
 
-- Python 3.11 or newer
-- Stage 1 runtime dependencies: none (stdlib only)
-- Tests: `pytest`
+- **Python**: 3.11, 3.12, 3.13 (primary development target), and 3.14
+- **Supported Operating Systems**:
+  - Kali Linux and other Debian/Ubuntu-based Linux distributions
+  - Windows 10/11 (PowerShell & Command Prompt)
+  - macOS (Apple Silicon & Intel)
+- **Runtime Dependencies**: Zero (Python standard library only)
+- **Development & Testing Dependencies**: `pytest>=8.0`
 
-## Install
+## Installation & Setup
 
-From the repository root:
-
+### Kali Linux & Linux Distributions
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .
+pip install --no-build-isolation -e .
 ```
 
-Without a package install you can still run:
-
-```bash
-PYTHONPATH=. python -m scamsentry.cli analyze --text "hello"
+### Windows 10/11 (PowerShell)
+```powershell
+py -3.13 -m venv .venv
+# If PowerShell execution policy blocks activation:
+# Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install --no-build-isolation -e .
 ```
 
-## CLI
+### macOS (Terminal / zsh)
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install --no-build-isolation -e .
+```
 
-Exactly one input source (`--text` or `--file`):
+### Portable Execution (Without Package Installation)
+You can run ScamSentry directly from any directory:
+```bash
+python -m scamsentry.cli analyze --text "Your account will be blocked. Verify now."
+```
+
+## CLI Usage
+
+The command-line interface accepts exactly one input source (`--text` or `--file`):
 
 ```bash
-python -m scamsentry analyze --text "Your account will be suspended. Enter your password."
+# Direct command line invocation (after installation)
+scamsentry analyze --text "Your account will be blocked. Verify now."
+scamsentry analyze --file examples/suspicious_message.txt
+scamsentry analyze --file examples/suspicious_message.txt --json
+
+# Module invocation (cross-platform standard)
+python -m scamsentry.cli --help
+python -m scamsentry.cli analyze --help
 python -m scamsentry.cli analyze --file examples/suspicious_message.txt
 python -m scamsentry.cli analyze --file examples/suspicious_message.txt --json
 ```
 
-Human-readable output omits the original message by default (pass `--include-message` to include it). JSON output includes `original_message` so a later pipeline can quote evidence; treat JSON as sensitive.
-
-- JSON goes to stdout; diagnostics go to stderr.
-- Non-zero exit on invalid input, file errors, or unexpected failures.
-- Ordinary users do not receive Python tracebacks.
+Human-readable output omits the original message by default for privacy (pass `--include-message` to display it). JSON mode outputs machine-readable data to `stdout`, while status and errors go to `stderr`. Non-zero exit codes are returned for invalid input or file errors without exposing Python tracebacks.
 
 Library API:
 
@@ -88,13 +112,54 @@ Repeated matches of the same rule do not inflate the band. Invalid input is an e
 
 Offline URL inspection **cannot** establish whether a remote site is currently malicious.
 
-## Tests
+## Testing & Cross-Platform Verification
 
+### Unix Shell (Kali Linux / Ubuntu / macOS)
 ```bash
-pytest
+pytest -v
+# or
+python -m pytest -v
 ```
 
-All fixtures are synthetic. Tests do not use the network or an AI model.
+### Windows (PowerShell)
+```powershell
+python -m pytest -v
+```
+
+All test fixtures are synthetic. Tests never access the external network and do not require an AI model.
+
+### Windows Verification Procedure
+To verify this codebase on Windows 10/11 without modifying any source code:
+
+1. Open PowerShell and navigate to the project directory:
+   ```powershell
+   cd \path\to\HackDay
+   ```
+2. Create and activate a Python 3.11+ virtual environment:
+   ```powershell
+   py -3 -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
+3. Install dependencies and the package:
+   ```powershell
+   python -m pip install -r requirements.txt
+   python -m pip install --no-build-isolation -e .
+   ```
+4. Run the full test suite:
+   ```powershell
+   python -m pytest -v
+   ```
+5. Test CLI functionality:
+   ```powershell
+   scamsentry analyze --text "Your account will be blocked. Verify now."
+   scamsentry analyze --file examples\suspicious_message.txt
+   scamsentry analyze --file examples\suspicious_message.txt --json
+   ```
+
+### Tested Platform Disclosure
+- **Directly Executed Platform**: Linux (x86_64, Python 3.14.7).
+- **Windows & macOS Compatibility**: Ensured via strict compliance with standard library abstractions (`pathlib.Path` for path resolution, explicit UTF-8 encoding across all text operations, universal newline handling, absence of shell execution, and zero platform-specific binaries or APIs).
+
 
 ## Example outputs
 

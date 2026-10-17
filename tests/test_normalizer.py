@@ -53,3 +53,23 @@ def test_locate_in_original_unique() -> None:
 def test_locate_in_original_ambiguous_returns_none() -> None:
     original = "password then password"
     assert locate_in_original(original, "password") is None
+
+
+def test_crlf_and_lf_newlines_normalized_identically() -> None:
+    unix_text = "Line one.\nLine two.\nLine three."
+    windows_text = "Line one.\r\nLine two.\r\nLine three."
+    mac_legacy_text = "Line one.\rLine two.\rLine three."
+
+    unix_norm = normalise_message(unix_text)
+    win_norm = normalise_message(windows_text)
+    mac_norm = normalise_message(mac_legacy_text)
+
+    # Normalised matching form is identical across platforms
+    assert unix_norm.normalised == win_norm.normalised == mac_norm.normalised
+    assert unix_norm.normalised == "line one. line two. line three."
+
+    # Originals are strictly preserved with platform-specific newlines
+    assert unix_norm.original == unix_text
+    assert win_norm.original == windows_text
+    assert mac_norm.original == mac_legacy_text
+
