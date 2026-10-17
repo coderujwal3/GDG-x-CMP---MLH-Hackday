@@ -1,0 +1,6 @@
+# ScamSentry AI — Stage 1 Dependencies
+#
+# Core runtime: Python 3.11+ standard library only (zero external runtime dependencies).
+#
+# Development and testing:
+pytest>=8.0

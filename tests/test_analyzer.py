@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import ast
+import json
+from pathlib import Path
+
+import pytest
+
+from scamsentry import analyse_message
+from scamsentry.analyzer import analyse_file, assign_risk_band
+from scamsentry.models import (
+    AnalysisStatus,
+    Category,
+    Finding,
+    FindingSource,
+    InputError,
+    ObservationKind,
+    RiskBand,
+    Severity,
+    EvidenceSource,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLES = ROOT / "examples"
+
+
+def test_size_limit_before_analysis() -> None:
+    with pytest.raises(InputError, match="exceeds"):
+        analyse_message("hello world", max_bytes=3)
+
+
+def test_unicode_invisible_flagged_and_original_kept() -> None:
+    original = "Please enter your password\u200b now."
+    result = analyse_message(original)
+    assert result.original_message == original
+    assert any(item.rule_id == "F_INVISIBLE_UNICODE" for item in result.findings)
+    assert "\u200b" in result.original_message
+
+
+def test_fictional_suspicious_high_concern() -> None:
+    text = EXAMPLES.joinpath("suspicious_message.txt").read_text(encoding="utf-8")
+    result = analyse_message(text)
+    assert result.analysis_status is AnalysisStatus.COMPLETE
+    categories = {item.category for item in result.findings}
+    assert Category.URGENCY in categories
+    assert Category.CREDENTIAL in categories
+    assert Category.URL in categories
+    assert result.risk_band is RiskBand.HIGH_CONCERN
+    assert any(item.rule_id == "E_IP_HOST" for item in result.findings)
+    assert any(item.rule_id == "E_UNUSUAL_PORT" for item in result.findings)
+    assert any(item.rule_id == "E_MISLEADING_HOST" for item in result.findings)
+    ip_findings = [
+        item
+        for item in result.findings
+        if item.rule_id == "E_HOST_STRUCTURE" and "192.0.2.55" in item.evidence_text
+    ]
+    assert ip_findings == []
+
+
+def test_benign_low_concern() -> None:
+    text = EXAMPLES.joinpath("benign_message.txt").read_text(encoding="utf-8")
+    result = analyse_message(text)
+    assert result.risk_band is RiskBand.LOW_CONCERN
+    assert result.finding_count == 0
+
+
+def test_ambiguous_not_high_concern() -> None:
+    text = EXAMPLES.joinpath("ambiguous_message.txt").read_text(encoding="utf-8")
+    result = analyse_message(text)
+    assert result.risk_band in {RiskBand.LOW_CONCERN, RiskBand.REVIEW}
+    assert result.risk_band is not RiskBand.HIGH_CONCERN
+
+
+def test_repeated_same_rule_does_not_auto_inflate() -> None:
+    text = "Your account will be suspended. " * 8
+    result = analyse_message(text)
+    assert result.risk_band is RiskBand.REVIEW
+    locks = [item for item in result.findings if item.rule_id == "A_ACCOUNT_LOCK"]
+    assert len(locks) >= 2
+
+
+def test_accurate_quotes_and_offsets() -> None:
+    text = "Enter your password at once."
+    result = analyse_message(text)
+    for item in result.findings:
+        if item.start_offset is None:
+            continue
+        quoted = text[item.start_offset : item.end_offset]
+        assert quoted == item.evidence_text
+
+
+def test_json_serialisation_deterministic() -> None:
+    text = "Your account will be suspended. Enter your password."
+    first = json.dumps(analyse_message(text).to_dict(), ensure_ascii=False)
+    second = json.dumps(analyse_message(text).to_dict(), ensure_ascii=False)
+    assert first == second
+    payload = json.loads(first)
+    assert payload["schema_version"] == "1.0"
+    assert payload["findings"][0]["source"] == "deterministic"
+    assert "original_message" in payload
+
+
+def test_risk_band_policy_unit() -> None:
+    def finding(category: Category, severity: Severity, rule_id: str) -> Finding:
+        return Finding(
+            id="x",
+            rule_id=rule_id,
+            category=category,
+            severity=severity,
+            title="t",
+            evidence_text="e",
+            evidence_source=EvidenceSource.ORIGINAL,
+            explanation="x",
+            observation_kind=ObservationKind.HEURISTIC,
+            source=FindingSource.DETERMINISTIC,
+        )
+
+    assert assign_risk_band([]) is RiskBand.LOW_CONCERN
+    one = [finding(Category.URGENCY, Severity.HIGH, "A_ACCOUNT_LOCK")]
+    assert assign_risk_band(one) is RiskBand.REVIEW
+    two = one + [finding(Category.CREDENTIAL, Severity.HIGH, "B_OTP")]
+    assert assign_risk_band(two) is RiskBand.HIGH_CONCERN
+
+
+def test_model_independent_no_llm_imports() -> None:
+    root = ROOT / "scamsentry"
+    forbidden = ("openai", "anthropic", "transformers", "llama", "gemini", "httpx", "requests")
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module.split(".")[0]]
+            for name in names:
+                assert name not in forbidden
+                assert name != "urllib.request"
+
+
+def test_analyse_file_and_invalid_unicode(tmp_path: Path) -> None:
+    path = tmp_path / "ok.txt"
+    path.write_text("Hello example.com is not a URL without a scheme.", encoding="utf-8")
+    result = analyse_file(path)
+    assert result.analysis_status is AnalysisStatus.COMPLETE
+
+    bad = tmp_path / "bad.txt"
+    bad.write_bytes(b"\xff\xfe not utf-8")
+    with pytest.raises(InputError, match="UTF-8"):
+        analyse_file(bad)
+
+    with pytest.raises(InputError, match="not found"):
+        analyse_file(tmp_path / "missing.txt")
+
+
+def test_risk_band_inconclusive_on_failed_or_partial() -> None:
+    assert assign_risk_band([], status=AnalysisStatus.FAILED) is RiskBand.INCONCLUSIVE
+    assert assign_risk_band([], status=AnalysisStatus.PARTIAL) is RiskBand.INCONCLUSIVE
+
+
+def test_analyse_file_errors(tmp_path: Path) -> None:
+    # Directory as file
+    sub_dir = tmp_path / "sub_dir"
+    sub_dir.mkdir()
+    with pytest.raises(InputError, match="directory"):
+        analyse_file(sub_dir)
+
+    # Oversized file
+    big_file = tmp_path / "big.txt"
+    big_file.write_text("A" * 100, encoding="utf-8")
+    with pytest.raises(InputError, match="exceeds"):
+        analyse_file(big_file, max_bytes=50)
+
+
+def test_analyse_message_type_validation() -> None:
+    with pytest.raises(InputError, match="string"):
+        analyse_message(12345)  # type: ignore[arg-type]
+

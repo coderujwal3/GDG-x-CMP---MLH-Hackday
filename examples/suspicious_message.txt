@@ -1,0 +1,6 @@
+This is Amazon Security. Your account will be suspended within 24 hours unless you verify.
+
+Enter your password and the verification code sent to you, then pay the unexpected processing fee now.
+
+Use this link immediately: http://192.0.2.55:8088/login
+Also review https://paypal.unrelated-example.test/verify

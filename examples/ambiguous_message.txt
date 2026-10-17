@@ -1,0 +1,3 @@
+DHL: your parcel is out for delivery. Track it at https://example.com/track/ZX-4401 when convenient.
+
+If the time window does not work, reply to this notification and we will try another slot.
