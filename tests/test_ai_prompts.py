@@ -69,6 +69,20 @@ def test_prompt_lists_supported_taxonomies() -> None:
     assert "unable_to_assess" in prompt
 
 
+def test_prompt_requires_one_combined_explanation_per_finding_id() -> None:
+    prompt = build_prompt(
+        "Your account is suspended. Enter your password now.",
+        analyse_message("Your account is suspended. Enter your password now."),
+    )
+    normalized_prompt = " ".join(prompt.split())
+    assert "at most one finding_explanations entry per Stage 1 finding ID" in normalized_prompt
+    assert "combine multiple observations about the same finding into one concise interpretation" in normalized_prompt
+    assert "Only IDs in stage1.findings[*].id may be referenced" in normalized_prompt
+    assert "If no finding explanation is warranted, return an empty array" in normalized_prompt
+    assert "not independently verified facts" in normalized_prompt
+    assert "Follow this JSON schema exactly" in normalized_prompt
+
+
 def test_arbitrary_objects_are_not_serialized_as_strings() -> None:
     result = analyse_message("Ordinary information.")
     prompt = build_prompt(result.original_message, result)

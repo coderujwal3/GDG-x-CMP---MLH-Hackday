@@ -116,6 +116,26 @@ def test_independent_high_categories_produce_high_and_linked_actions() -> None:
     assert all(item["priority"] == "immediate" for item in payload["recommendations"])
 
 
+@pytest.mark.parametrize(
+    "category",
+    [Category.URL, Category.CREDENTIAL, Category.PAYMENT],
+)
+def test_one_high_finding_remains_review_under_documented_policy(
+    category: Category,
+) -> None:
+    result = _stage1(_finding("F001", category), band=RiskBand.REVIEW)
+    decision = assess(result)
+    payload = decision.to_dict()
+
+    assert decision.final_risk_band is RiskBand.REVIEW
+    assert payload["risk_policy_version"] == "1.0"
+    assert "Stage 1 risk band: REVIEW" in decision.rationale
+    assert "Stage 3 final risk band: REVIEW" in decision.rationale
+    assert "F001" in decision.rationale
+    assert "HIGH finding alone does not meet" in decision.rationale
+    assert "stage1_high_threshold_not_met" in decision.policy_rules
+
+
 def test_stage2_is_context_only_and_conflict_is_reported() -> None:
     result = _stage1(_finding("F001", Category.PAYMENT), band=RiskBand.REVIEW)
     before = result.to_dict()
@@ -162,6 +182,7 @@ def test_unavailable_or_invalid_ai_does_not_block_stage1_decision() -> None:
     assert malformed.ai_status == "invalid"
     assert not any(signal.source.value == "stage2" for signal in malformed.signals)
     assert any("invalid" in reason for reason in malformed.to_dict()["uncertainty_reasons"])
+    assert "Stage 2 was invalid and was excluded" in malformed.rationale
 
 
 def test_incomplete_stage1_is_inconclusive_and_uncertain() -> None:
@@ -170,6 +191,12 @@ def test_incomplete_stage1_is_inconclusive_and_uncertain() -> None:
     decision = assess(result)
     assert decision.final_risk_band is RiskBand.INCONCLUSIVE
     assert decision.uncertainty.value == "unable_to_assess"
+    assert "Stage 1 status is partial" in decision.rationale
+    assert "dns_resolution" in decision.rationale
+    assert any(
+        "Stage 1 checks were not performed: dns_resolution" in reason
+        for reason in decision.uncertainty_reasons
+    )
 
 
 def test_malformed_stage1_is_rejected() -> None:
@@ -197,3 +224,5 @@ def test_results_are_deterministic_and_preserve_stage1_values() -> None:
     second = assess(result).to_dict()
     assert first == second
     assert result.to_dict() == before
+    assert "HIGH_CONCERN was selected because 2 distinct strong categories" in first["rationale"]
+    assert "HIGH_CONCERN" in first["rationale"]

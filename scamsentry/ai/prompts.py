@@ -26,12 +26,16 @@ more allowed labels), finding_explanations (array of objects containing only
 finding_id and interpretation), uncertainty (one allowed label),
 uncertainty_reasons (array of strings), alternative_explanations (one or more
 strings), recommended_actions (one or more strings).
-Only IDs in stage1.findings[*].id are finding IDs. Never use entries from
-checks_incomplete or any other text as a finding ID. If stage1.findings is empty,
-finding_explanations must be an empty array. Do not invent evidence or IDs.
-Finding explanations may be partial; do not claim you explained findings you
-did not discuss. High or unable_to_assess uncertainty requires at least one
-specific uncertainty reason. Do not add confidence scores or extra JSON fields.
+Return at most one finding_explanations entry per Stage 1 finding ID; combine
+multiple observations about the same finding into one concise interpretation.
+Only IDs in stage1.findings[*].id may be referenced; do not invent IDs or use
+checks_incomplete entries as finding IDs. If no finding explanation is
+warranted, return an empty array. Contextual interpretations are not
+independently verified facts. Finding explanations may be partial; do not claim
+you explained findings you did not discuss. Follow this JSON schema exactly.
+If stage1.findings is empty, finding_explanations must be an empty array. High
+or unable_to_assess uncertainty requires at least one specific uncertainty
+reason. Do not add confidence scores or extra JSON fields.
 """
 
 

@@ -112,7 +112,11 @@ Stage 3 also runs automatically with `--ai`. Stage 2 is optional context only:
 it cannot create or remove Stage 1 evidence or alter the Stage 3 risk band.
 Stage 3 uses the Stage 1 finding-based risk policy, treats incomplete analyses
 as inconclusive, and treats no findings as inconclusive rather than evidence of
-safety. See [risk_policy.md](risk_policy.md) for policy version 1.0.
+safety. Finding severity is distinct from the overall risk band: one `HIGH`
+finding does not by itself force `HIGH_CONCERN`. Stage 3's rationale includes
+the original Stage 1 band, final band, supporting findings, applied rules, and
+relevant uncertainty notes. See [risk_policy.md](risk_policy.md) for policy
+version 1.0.
 
 ## Output and failures
 
@@ -126,7 +130,10 @@ safety. See [risk_policy.md](risk_policy.md) for policy version 1.0.
 - An invalid Stage 2 object is excluded and reported as `decision.ai_status:
   "invalid"`; an unavailable local model is reported as `"unavailable"`.
 - Human output labels Stage 1 deterministic findings and Stage 2 AI
-  interpretation separately from the Stage 3 decision and recommended actions.
+  interpretation separately from the Stage 3 decision and recommended actions;
+  invalid model output is distinguished from an unavailable provider. The
+  human-readable report groups evidence, policy rules, uncertainty notes, and
+  actions under numbered stage headings.
 - JSON stays on stdout. Warnings and diagnostics go to stderr.
 - If optional AI fails, the CLI still returns the complete Stage 1 result and
   preserves its existing successful exit code. This is not an AI success

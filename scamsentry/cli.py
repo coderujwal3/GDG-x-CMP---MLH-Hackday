@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import sys
+import textwrap
 from typing import Sequence, TextIO
 
 from scamsentry.analyzer import analyse_file, analyse_message
@@ -102,71 +103,124 @@ def _truncate(text: str, limit: int = EVIDENCE_TRUNCATE) -> str:
     return compact[: limit - 1] + "…"
 
 
+def _wrapped_line(label: str, value: str, *, indent: str = "  ") -> list[str]:
+    prefix = f"{indent}{label}: "
+    return textwrap.wrap(
+        prefix + value,
+        width=88,
+        subsequent_indent=" " * len(prefix),
+        break_long_words=False,
+        break_on_hyphens=False,
+    ) or [prefix.rstrip()]
+
+
+def _wrapped_bullet(value: str, *, indent: str = "    ") -> list[str]:
+    prefix = f"{indent}- "
+    return textwrap.wrap(
+        prefix + value,
+        width=88,
+        subsequent_indent=" " * len(prefix),
+        break_long_words=False,
+        break_on_hyphens=False,
+    ) or [prefix.rstrip()]
+
+
 def _render_human(result: AnalysisResult, *, include_message: bool) -> str:
     lines: list[str] = [
-        "ScamSentry AI — Stage 1 deterministic analysis",
-        f"Status: {result.analysis_status.value}",
-        f"Risk band: {result.risk_band.value if result.risk_band else 'n/a'} "
-        "(rule-based policy, not a probability)",
-        f"Findings: {result.finding_count}",
+        "SCAMSENTRY ANALYSIS REPORT",
+        "==========================",
+        "",
+        "1. Stage 1 deterministic analysis",
+        f"  Status: {result.analysis_status.value}",
+        f"  Stage 1 risk band: "
+        f"{result.risk_band.value if result.risk_band else 'n/a'} "
+        "(rule-based, not a probability)",
+        f"  Findings: {result.finding_count}",
         "",
     ]
     if include_message:
-        lines.append("Original message:")
-        lines.append(result.original_message)
+        lines.extend(_wrapped_line("Original message", result.original_message))
         lines.append("")
     else:
-        lines.append(
-            "Original message omitted (pass --include-message to show it; "
-            "message text may be sensitive)."
+        lines.extend(
+            _wrapped_line(
+                "Original message omitted",
+                "pass --include-message to show it (may contain sensitive text)",
+            )
         )
         lines.append("")
 
     if not result.findings:
-        lines.append("No implemented checks fired. This is not a verified-safe verdict.")
+        lines.append("  No implemented checks fired; this is not a verified-safe verdict.")
+    else:
+        lines.append("  Findings:")
     for finding in result.findings:
         offset = ""
         if finding.start_offset is not None and finding.end_offset is not None:
             offset = f" [{finding.start_offset}:{finding.end_offset}]"
         lines.append(
-            f"- {finding.id} {finding.rule_id} {finding.severity.value} "
-            f"({finding.category.value}, {finding.observation_kind.value})"
+            f"    [{finding.id}] {finding.rule_id} — {finding.severity.value} "
+            f"/ {finding.category.value} ({finding.observation_kind.value})"
         )
-        lines.append(f"  {finding.title}")
-        lines.append(f"  evidence{offset}: {_truncate(finding.evidence_text)!r}")
-        lines.append(f"  {finding.explanation}")
+        lines.extend(_wrapped_line("Observation", finding.title, indent="      "))
+        lines.extend(
+            _wrapped_line(
+                f"Evidence{offset}",
+                repr(_truncate(finding.evidence_text)),
+                indent="      ",
+            )
+        )
+        lines.extend(
+            _wrapped_line("Rule explanation", finding.explanation, indent="      ")
+        )
         lines.append("")
 
-    lines.append("Checks not performed: " + ", ".join(result.checks_incomplete))
-    lines.append("Limitations:")
+    lines.append("  Checks not performed:")
+    if result.checks_incomplete:
+        for check in result.checks_incomplete:
+            lines.append(f"    - {check}")
+    else:
+        lines.append("    - None recorded")
+    lines.append("  Limitations:")
     for item in result.limitations:
-        lines.append(f"- {item}")
+        lines.extend(_wrapped_bullet(item))
     return "\n".join(lines).rstrip() + "\n"
 
 
 def _render_ai_human(ai_payload: dict) -> str:
-    lines = ["Stage 2 AI interpretation (advisory):"]
+    lines = ["2. Stage 2 AI interpretation (advisory):"]
     if ai_payload.get("status") != "complete":
         error = ai_payload.get("error", {})
+        status = "Invalid" if ai_payload.get("status") == "invalid" else "Unavailable"
         lines.append(
-            f"Unavailable ({error.get('code', 'internal_error')}): "
-            f"{error.get('message', 'AI interpretation could not be completed.')}"
+            f"  Status: {status} ({error.get('code', 'internal_error')})"
         )
-        lines.append("Stage 1 findings and risk band remain authoritative.")
-        return "\n".join(lines) + "\n"
+        lines.extend(
+            _wrapped_line(
+                "Diagnostic",
+                error.get("message", "AI interpretation could not be completed."),
+            )
+        )
+        lines.append("  Stage 1 findings and risk band remain authoritative.")
+        return "\n".join(lines)
 
     lines.extend(
         [
-            f"Model: {ai_payload['model']}",
-            f"Summary: {ai_payload['summary']}",
-            f"Likely intent: {ai_payload['likely_intent']}",
-            "Tactics: " + ", ".join(ai_payload["tactics"]),
-            f"Uncertainty: {ai_payload['uncertainty']}",
+            "  Status: complete",
+            f"  Model: {ai_payload['model']}",
+            f"  Uncertainty: {ai_payload['uncertainty']}",
         ]
     )
+    lines.extend(_wrapped_line("Summary", ai_payload["summary"]))
+    lines.extend(_wrapped_line("Likely intent", ai_payload["likely_intent"]))
+    lines.extend(_wrapped_line("Tactics", ", ".join(ai_payload["tactics"])))
     for item in ai_payload["finding_explanations"]:
-        lines.append(
-            f"- {item['finding_id']}: {item['interpretation']}"
+        lines.extend(
+            _wrapped_line(
+                f"Finding {item['finding_id']}",
+                item["interpretation"],
+                indent="  ",
+            )
         )
     for heading, key in (
         ("Uncertainty reasons", "uncertainty_reasons"),
@@ -174,28 +228,51 @@ def _render_ai_human(ai_payload: dict) -> str:
         ("Recommended actions", "recommended_actions"),
     ):
         if ai_payload[key]:
-            lines.append(f"{heading}:")
-            lines.extend(f"- {item}" for item in ai_payload[key])
-    lines.append(ai_payload["advisory"])
-    return "\n".join(lines) + "\n"
+            lines.append(f"  {heading}:")
+            for item in ai_payload[key]:
+                lines.extend(_wrapped_bullet(item))
+    lines.extend(_wrapped_line("Advisory", ai_payload["advisory"]))
+    return "\n".join(lines)
 
 
 def _render_decision_human(decision_payload: dict) -> str:
     lines = [
-        "Stage 3 deterministic decision:",
-        f"Final risk band: {decision_payload['final_risk_band']}",
-        f"Rationale: {decision_payload['rationale']}",
-        f"Uncertainty: {decision_payload['uncertainty']}",
-        "Recommended actions:",
+        "3. Stage 3 deterministic decision:",
+        f"  Policy version: {decision_payload['risk_policy_version']}",
+        f"  Stage 1 risk band: {decision_payload['stage1_risk_band'] or 'not supplied'}",
+        f"  Final risk band: {decision_payload['final_risk_band']}",
+        f"  Stage 2 status: {decision_payload['ai_status']}",
+        f"  Uncertainty: {decision_payload['uncertainty']}",
     ]
-    for item in decision_payload["recommendations"]:
+    lines.extend(_wrapped_line("Rationale", decision_payload["rationale"]))
+    lines.append("  Policy rules:")
+    for rule in decision_payload["policy_rules"]:
+        lines.extend(_wrapped_bullet(rule, indent="    "))
+    lines.append("  Supporting findings:")
+    if decision_payload["supporting_finding_ids"]:
         lines.append(
-            f"- [{item['priority']}] {item['action']} (reason: {item['reason']})"
+            "    " + ", ".join(decision_payload["supporting_finding_ids"])
+        )
+    else:
+        lines.append("    None")
+    if decision_payload["uncertainty_reasons"]:
+        lines.append("  Uncertainty and incomplete-check notes:")
+        for reason in decision_payload["uncertainty_reasons"]:
+            lines.extend(_wrapped_bullet(reason))
+    lines.append("  Recommended actions:")
+    for item in decision_payload["recommendations"]:
+        lines.extend(
+            _wrapped_bullet(
+                f"[{item['priority']}] {item['action']} "
+                f"(reason: {item['reason']}; supporting findings: "
+                f"{', '.join(item['supporting_finding_ids']) or 'none'})"
+            )
         )
     if decision_payload["notes"]:
-        lines.append("Decision notes:")
-        lines.extend(f"- {item}" for item in decision_payload["notes"])
-    return "\n".join(lines) + "\n"
+        lines.append("  Decision notes:")
+        for item in decision_payload["notes"]:
+            lines.extend(_wrapped_bullet(item))
+    return "\n".join(lines)
 
 
 def _emit_json(payload: dict, stdout: TextIO) -> None:
@@ -264,8 +341,19 @@ def run(
                 timeout=args.ai_timeout,
             ).to_dict()
         except AIAnalysisError as exc:
+            status = (
+                "invalid"
+                if exc.code
+                in {
+                    AIErrorCode.EMPTY_OUTPUT,
+                    AIErrorCode.INVALID_JSON,
+                    AIErrorCode.INVALID_SCHEMA,
+                    AIErrorCode.OUTPUT_TOO_LARGE,
+                }
+                else "unavailable"
+            )
             ai_payload = {
-                "status": "unavailable",
+                "status": status,
                 "schema_version": "1.0",
                 "model": exc.model_id or args.ai_model,
                 "error": {
@@ -274,7 +362,7 @@ def run(
                 },
             }
             print(
-                f"warning: AI interpretation unavailable "
+                f"warning: AI interpretation {status} "
                 f"({exc.code.value}): {exc.message}",
                 file=err,
             )
@@ -306,7 +394,7 @@ def run(
             result,
             complete_ai,
             ai_status=(
-                "unavailable"
+                ai_payload["status"]
                 if args.ai and complete_ai is None
                 else None
             ),

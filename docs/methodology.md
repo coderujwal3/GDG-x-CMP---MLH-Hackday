@@ -22,6 +22,12 @@ The Stage 1 risk band remains its existing transparent heuristic. Stage 2
 cannot change it, and the band is not a probability or externally verified
 reputation.
 
+Finding severity describes an individual observation, not the overall risk
+band. A single `HIGH`-severity finding does not automatically produce
+`HIGH_CONCERN`; Stage 3's versioned policy also requires findings in at least
+two distinct strong categories, including a `HIGH` finding. The initial Stage 1
+band and separate Stage 3 outcome are both retained.
+
 Stage 3 validates the typed Stage 1 result and any supplied Stage 2 envelope,
 normalizes their traceable signals into a separate result, and computes a
 versioned final risk band. It never edits either input. Stage 2 interpretations

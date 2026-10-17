@@ -53,6 +53,12 @@ def test_valid_response_is_converted_to_typed_analysis() -> None:
     assert result.to_dict()["advisory"]
 
 
+def test_empty_finding_explanations_are_valid_even_when_findings_exist() -> None:
+    payload = _payload()
+    payload["finding_explanations"] = []
+    assert _parse(payload).finding_explanations == ()
+
+
 @pytest.mark.parametrize(
     ("raw", "code"),
     [

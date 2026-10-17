@@ -48,6 +48,23 @@ estimates or verified reputation.
    uncertainty also cannot make Stage 1 appear more certain: findings impose a
    minimum `moderate` uncertainty.
 
+### Finding severity is not the overall risk band
+
+`LOW`, `MEDIUM`, and `HIGH` describe the severity of an individual Stage 1
+finding. They are not final risk bands and do not map directly to them. In
+particular, one `HIGH` finding does not by itself produce `HIGH_CONCERN`.
+`HIGH_CONCERN` requires at least two distinct strong categories (a category
+with at least one `MEDIUM` or `HIGH` finding), including at least one `HIGH`
+finding. Urgency and impersonation alone are treated as correlated. If the
+threshold is not met but findings exist, Stage 3 selects `REVIEW`.
+
+Stage 3 preserves the supplied Stage 1 risk band as `stage1_risk_band` and
+records its independently recomputed outcome as `final_risk_band`. For example,
+a single `HIGH` URL finding may leave Stage 1 and Stage 3 at `REVIEW`: the
+finding is high severity, but only one strong category supports the decision.
+The policy does not treat a `.test` hostname, a missing check, or an absent
+finding as proof of a real malicious site or of safety.
+
 ## Signals and traceability
 
 Each Stage 1 finding becomes a separate `stage1` signal with its finding ID,
@@ -57,10 +74,13 @@ Only Stage 1 finding IDs appear in `supporting_finding_ids` and in
 recommendation evidence references. Stage 2 values are never relabeled as
 verified facts.
 
-The `policy_rules` list identifies the policy clauses used to reach the band.
-`rationale` gives a compact human-readable description of those clauses.
-Signals, policy rules, supporting IDs, and recommendation evidence references
-are stable and deterministically ordered.
+The decision records its policy version, original Stage 1 band, final Stage 3
+band, supporting finding IDs, signals, policy rule IDs, uncertainty and
+incomplete-check reasons. `rationale` names the initial and final bands,
+supporting findings, applied rule IDs, why the threshold did or did not hold,
+and relevant uncertainty or incomplete-check notes. Signals, policy rules,
+supporting IDs, and recommendation evidence references are stable and
+deterministically ordered.
 
 ## Recommendations
 

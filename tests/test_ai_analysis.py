@@ -74,6 +74,23 @@ def test_invalid_output_is_rejected_and_stage1_is_unchanged() -> None:
     assert stage1.to_dict() == before
 
 
+def test_duplicate_finding_explanations_are_rejected_without_changing_stage1() -> None:
+    message = "Your account is suspended. Enter your password now."
+    stage1 = analyse_message(message)
+    before = stage1.to_dict()
+    output = json.loads(_valid_output())
+    output["finding_explanations"].append(
+        {
+            "finding_id": "F001",
+            "interpretation": "A second observation about the same finding.",
+        }
+    )
+    with pytest.raises(AIAnalysisError, match="explained more than once") as caught:
+        analyse_with_ai(message, stage1, FakeProvider(json.dumps(output)))
+    assert caught.value.code is AIErrorCode.INVALID_SCHEMA
+    assert stage1.to_dict() == before
+
+
 def test_provider_exception_is_normalized() -> None:
     class BrokenProvider(FakeProvider):
         def generate(self, prompt: str, *, timeout: float | None = None) -> str:
