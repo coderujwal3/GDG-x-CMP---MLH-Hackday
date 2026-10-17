@@ -88,6 +88,7 @@ class NormalisationResult:
     original: str
     normalised: str
     invisible_spans: tuple[InvisibleSpan, ...]
+    index_map: tuple[int, ...] = ()
 
 
 def utf8_byte_length(text: str) -> int:
@@ -138,28 +139,65 @@ def find_invisible_spans(original: str) -> tuple[InvisibleSpan, ...]:
     return tuple(spans)
 
 
+def build_normalised_and_map(original: str) -> tuple[str, tuple[int, ...]]:
+    """Build normalised text and an exact index mapping from normalised to original indices."""
+    raw_pairs: list[tuple[str, int]] = []
+    n = len(original)
+    for i, ch in enumerate(original):
+        if _is_invisible(ch):
+            prev_alnum = i > 0 and original[i - 1].isalnum()
+            next_alnum = i + 1 < n and original[i + 1].isalnum()
+            if prev_alnum and next_alnum:
+                # Word-splitting evasion (e.g. pass\u200bword) — omit from normalised
+                continue
+            raw_pairs.append((" ", i))
+        elif ch in {"\u00a0", " ", "\t", "\n", "\r"}:
+            raw_pairs.append((" ", i))
+        else:
+            norm_ch = unicodedata.normalize("NFKC", ch).lower()
+            for c in norm_ch:
+                raw_pairs.append((c, i))
+
+    final_pairs: list[tuple[str, int]] = []
+    idx = 0
+    # Strip leading whitespace
+    while idx < len(raw_pairs) and raw_pairs[idx][0] == " ":
+        idx += 1
+    # Collapse multiple whitespace
+    while idx < len(raw_pairs):
+        c, orig_i = raw_pairs[idx]
+        if c == " ":
+            if final_pairs and final_pairs[-1][0] == " ":
+                idx += 1
+                continue
+            final_pairs.append((" ", orig_i))
+        else:
+            final_pairs.append((c, orig_i))
+        idx += 1
+    # Strip trailing whitespace
+    while final_pairs and final_pairs[-1][0] == " ":
+        final_pairs.pop()
+
+    norm_str = "".join(p[0] for p in final_pairs)
+    idx_map = tuple(p[1] for p in final_pairs)
+    return norm_str, idx_map
+
+
 def normalise_for_matching(original: str) -> str:
     """NFKC + strip invisible formatting + collapse whitespace.
 
     Used only for matching. The original message is never rewritten.
     """
-
-    nfkc = unicodedata.normalize("NFKC", original)
-    without_invisible: list[str] = []
-    for char in nfkc:
-        if _is_invisible(char) or char in {"\u00a0"}:
-            without_invisible.append(" ")
-            continue
-        without_invisible.append(char)
-    collapsed = _WHITESPACE_RE.sub(" ", "".join(without_invisible))
-    return collapsed.strip().lower()
+    return build_normalised_and_map(original)[0]
 
 
 def normalise_message(original: str) -> NormalisationResult:
+    norm_str, idx_map = build_normalised_and_map(original)
     return NormalisationResult(
         original=original,
-        normalised=normalise_for_matching(original),
+        normalised=norm_str,
         invisible_spans=find_invisible_spans(original),
+        index_map=idx_map,
     )
 
 

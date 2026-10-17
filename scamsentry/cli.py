@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from typing import Sequence, TextIO
 
@@ -25,12 +26,23 @@ class QuietParser(argparse.ArgumentParser):
         raise ArgumentError(message)
 
 
+def _positive_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number of seconds") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise argparse.ArgumentTypeError("must be a finite positive number of seconds")
+    return timeout
+
+
 def _build_parser() -> QuietParser:
     parser = QuietParser(
         prog="scamsentry",
         description=(
-            "ScamSentry AI Stage 1: deterministic offline analysis of message text. "
-            "Findings are indicators, not proof of a scam."
+            "ScamSentry: deterministic offline message triage, with optional local "
+            "AI interpretation and deterministic recommendations. Findings are "
+            "indicators, not proof of a scam."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -57,6 +69,28 @@ def _build_parser() -> QuietParser:
         type=int,
         default=50 * 1024,
         help="Maximum UTF-8 size in bytes (default: 51200)",
+    )
+    analyze.add_argument(
+        "--ai",
+        action="store_true",
+        help="Add optional local-model interpretation and deterministic Stage 3 decision",
+    )
+    analyze.add_argument(
+        "--decision",
+        action="store_true",
+        help="Add deterministic Stage 3 risk assessment and recommendations",
+    )
+    analyze.add_argument(
+        "--ai-model",
+        default="gemma3:4b",
+        help="Ollama model already installed locally (default: gemma3:4b)",
+    )
+    analyze.add_argument(
+        "--ai-timeout",
+        type=_positive_timeout,
+        default=120.0,
+        metavar="SECONDS",
+        help="Maximum time for each Ollama CLI operation (default: 120)",
     )
     return parser
 
@@ -110,6 +144,60 @@ def _render_human(result: AnalysisResult, *, include_message: bool) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_ai_human(ai_payload: dict) -> str:
+    lines = ["Stage 2 AI interpretation (advisory):"]
+    if ai_payload.get("status") != "complete":
+        error = ai_payload.get("error", {})
+        lines.append(
+            f"Unavailable ({error.get('code', 'internal_error')}): "
+            f"{error.get('message', 'AI interpretation could not be completed.')}"
+        )
+        lines.append("Stage 1 findings and risk band remain authoritative.")
+        return "\n".join(lines) + "\n"
+
+    lines.extend(
+        [
+            f"Model: {ai_payload['model']}",
+            f"Summary: {ai_payload['summary']}",
+            f"Likely intent: {ai_payload['likely_intent']}",
+            "Tactics: " + ", ".join(ai_payload["tactics"]),
+            f"Uncertainty: {ai_payload['uncertainty']}",
+        ]
+    )
+    for item in ai_payload["finding_explanations"]:
+        lines.append(
+            f"- {item['finding_id']}: {item['interpretation']}"
+        )
+    for heading, key in (
+        ("Uncertainty reasons", "uncertainty_reasons"),
+        ("Alternative explanations", "alternative_explanations"),
+        ("Recommended actions", "recommended_actions"),
+    ):
+        if ai_payload[key]:
+            lines.append(f"{heading}:")
+            lines.extend(f"- {item}" for item in ai_payload[key])
+    lines.append(ai_payload["advisory"])
+    return "\n".join(lines) + "\n"
+
+
+def _render_decision_human(decision_payload: dict) -> str:
+    lines = [
+        "Stage 3 deterministic decision:",
+        f"Final risk band: {decision_payload['final_risk_band']}",
+        f"Rationale: {decision_payload['rationale']}",
+        f"Uncertainty: {decision_payload['uncertainty']}",
+        "Recommended actions:",
+    ]
+    for item in decision_payload["recommendations"]:
+        lines.append(
+            f"- [{item['priority']}] {item['action']} (reason: {item['reason']})"
+        )
+    if decision_payload["notes"]:
+        lines.append("Decision notes:")
+        lines.extend(f"- {item}" for item in decision_payload["notes"])
+    return "\n".join(lines) + "\n"
+
+
 def _emit_json(payload: dict, stdout: TextIO) -> None:
     stdout.write(json.dumps(payload, ensure_ascii=False, indent=2))
     stdout.write("\n")
@@ -157,10 +245,84 @@ def run(
             )
         return 1
 
+    payload = result.to_dict()
+    ai_payload: dict | None = None
+    if args.ai:
+        from scamsentry.ai.analysis import analyse_with_ai
+        from scamsentry.ai.ollama_provider import OllamaProvider
+        from scamsentry.ai.provider import AIAnalysisError, AIErrorCode
+
+        try:
+            provider = OllamaProvider(
+                model=args.ai_model,
+                timeout=args.ai_timeout,
+            )
+            ai_payload = analyse_with_ai(
+                result.original_message,
+                result,
+                provider,
+                timeout=args.ai_timeout,
+            ).to_dict()
+        except AIAnalysisError as exc:
+            ai_payload = {
+                "status": "unavailable",
+                "schema_version": "1.0",
+                "model": exc.model_id or args.ai_model,
+                "error": {
+                    "code": exc.code.value,
+                    "message": exc.message,
+                },
+            }
+            print(
+                f"warning: AI interpretation unavailable "
+                f"({exc.code.value}): {exc.message}",
+                file=err,
+            )
+        except Exception as exc:
+            ai_payload = {
+                "status": "unavailable",
+                "schema_version": "1.0",
+                "model": args.ai_model,
+                "error": {
+                    "code": AIErrorCode.INTERNAL_ERROR.value,
+                    "message": "AI analysis failed unexpectedly.",
+                },
+            }
+            print(
+                "warning: AI interpretation unavailable "
+                f"({type(exc).__name__}); Stage 1 results are unchanged.",
+                file=err,
+            )
+        payload["ai_analysis"] = ai_payload
+
+    decision_payload: dict | None = None
+    if args.decision or args.ai:
+        from scamsentry.decision import assess
+
+        complete_ai = (
+            ai_payload if ai_payload is not None and ai_payload.get("status") == "complete" else None
+        )
+        decision_payload = assess(
+            result,
+            complete_ai,
+            ai_status=(
+                "unavailable"
+                if args.ai and complete_ai is None
+                else None
+            ),
+        ).to_dict()
+        payload["decision"] = decision_payload
+
     if args.json:
-        _emit_json(result.to_dict(), out)
+        _emit_json(payload, out)
     else:
         out.write(_render_human(result, include_message=args.include_message))
+        if ai_payload is not None:
+            out.write("\n")
+            out.write(_render_ai_human(ai_payload))
+        if decision_payload is not None:
+            out.write("\n")
+            out.write(_render_decision_human(decision_payload))
     return 0
 
 

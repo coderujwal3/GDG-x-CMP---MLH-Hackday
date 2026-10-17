@@ -108,8 +108,18 @@ def assign_risk_band(
     findings: list[Finding],
     status: AnalysisStatus = AnalysisStatus.COMPLETE,
 ) -> RiskBand:
-    """Conservative category-grouped policy. Not a probability."""
+    """Assign a heuristic triage band (not calibrated probability or proof of fraud).
 
+    Risk bands:
+    - LOW_CONCERN: Zero findings detected across all rules and URL checks.
+    - REVIEW: One or more indicators present, but insufficient independent vectors
+      for high concern. Correlated indicators (e.g. brand impersonation derived
+      solely from urgency) and duplicate findings within the same category remain REVIEW.
+    - HIGH_CONCERN: Two or more genuinely independent categories with at least one
+      HIGH severity finding (e.g. Urgency + Credential harvesting, or Urgency +
+      Suspicious URL, or Credential + Suspicious URL).
+    - INCONCLUSIVE: Analysis failed or is partial/incomplete.
+    """
     if status in {AnalysisStatus.FAILED, AnalysisStatus.PARTIAL}:
         return RiskBand.INCONCLUSIVE
 
@@ -123,12 +133,20 @@ def assign_risk_band(
         if current is None or rank[item.severity] > rank[current]:
             independent[item.category] = item.severity
 
-    strong_categories = [
+    strong_categories = {
         category
         for category, severity in independent.items()
         if severity in {Severity.MEDIUM, Severity.HIGH}
-    ]
+    }
     has_high = any(severity is Severity.HIGH for severity in independent.values())
+
+    # Correlated indicators: Impersonation rule is triggered by pressure (urgency).
+    # If the ONLY strong categories present are {IMPERSONATION, URGENCY}, they are
+    # correlated signals from the same textual pattern and do not represent two
+    # independent attack vectors.
+    if strong_categories == {Category.IMPERSONATION, Category.URGENCY}:
+        return RiskBand.REVIEW
+
     if len(strong_categories) >= 2 and has_high:
         return RiskBand.HIGH_CONCERN
     return RiskBand.REVIEW
@@ -151,7 +169,9 @@ def analyse_message(
     for extracted in extracted_urls:
         findings.extend(findings_for_url(extracted))
 
-    findings.extend(run_text_rules(message, normalisation.normalised))
+    findings.extend(
+        run_text_rules(message, normalisation.normalised, normalisation.index_map)
+    )
     findings = apply_impersonation_gate(findings)
     findings = _assign_ids(findings)
 

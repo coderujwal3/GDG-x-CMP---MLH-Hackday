@@ -192,16 +192,28 @@ def _span_from_match(
     normalised: str,
     match: re.Match[str],
     haystack: str,
+    index_map: tuple[int, ...] = (),
 ) -> tuple[str, EvidenceSource, int | None, int | None]:
     snippet = match.group(0)
     if haystack is original:
         return snippet, EvidenceSource.ORIGINAL, match.start(), match.end()
+
+    # When matching normalised text, use exact index_map if available
+    s = match.start()
+    e = match.end()
+    if index_map and 0 <= s < len(index_map) and 0 < e <= len(index_map) and s < e:
+        orig_start = index_map[s]
+        orig_end = index_map[e - 1] + 1
+        if 0 <= orig_start < orig_end <= len(original):
+            return original[orig_start:orig_end], EvidenceSource.ORIGINAL, orig_start, orig_end
+
+    # Fallback: exact unique occurrence only
     located = locate_in_original(original, snippet)
     if located is not None:
         start, end = located
         return original[start:end], EvidenceSource.ORIGINAL, start, end
-    # Match exists only on the normalised form; do not fabricate original quotes
-    # or offsets.
+
+    # If the exact occurrence cannot be mapped reliably, leave offsets unset
     return snippet, EvidenceSource.NORMALISED, None, None
 
 
@@ -263,14 +275,16 @@ def dedupe_findings(findings: list[Finding]) -> list[Finding]:
     return result
 
 
-def run_text_rules(original: str, normalised: str) -> list[Finding]:
+def run_text_rules(
+    original: str,
+    normalised: str,
+    index_map: tuple[int, ...] = (),
+) -> list[Finding]:
     findings: list[Finding] = []
     for rule in TEXT_RULES:
-        matched_on_original = False
         for match in rule.pattern.finditer(original):
-            matched_on_original = True
             evidence, source, start, end = _span_from_match(
-                original, normalised, match, original
+                original, normalised, match, original, index_map
             )
             findings.append(
                 Finding(
@@ -288,11 +302,9 @@ def run_text_rules(original: str, normalised: str) -> list[Finding]:
                     end_offset=end,
                 )
             )
-        if matched_on_original:
-            continue
         for match in rule.pattern.finditer(normalised):
             evidence, source, start, end = _span_from_match(
-                original, normalised, match, normalised
+                original, normalised, match, normalised, index_map
             )
             findings.append(
                 Finding(

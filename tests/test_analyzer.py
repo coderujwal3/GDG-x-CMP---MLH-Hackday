@@ -123,6 +123,113 @@ def test_risk_band_policy_unit() -> None:
     assert assign_risk_band(two) is RiskBand.HIGH_CONCERN
 
 
+def test_correlated_indicators_do_not_inflate_risk_band() -> None:
+    def finding(category: Category, severity: Severity, rule_id: str) -> Finding:
+        return Finding(
+            id="x",
+            rule_id=rule_id,
+            category=category,
+            severity=severity,
+            title="t",
+            evidence_text="e",
+            evidence_source=EvidenceSource.ORIGINAL,
+            explanation="x",
+            observation_kind=ObservationKind.HEURISTIC,
+            source=FindingSource.DETERMINISTIC,
+        )
+
+    # Correlated pair: Impersonation derived solely from Urgency
+    correlated = [
+        finding(Category.URGENCY, Severity.HIGH, "A_ACCOUNT_LOCK"),
+        finding(Category.IMPERSONATION, Severity.MEDIUM, "D_IMPERSONATION"),
+    ]
+    assert assign_risk_band(correlated) is RiskBand.REVIEW
+
+    # Real message where only Amazon + account suspended are mentioned (no password/payment/URL)
+    message = "This is Amazon Security. Your account will be suspended."
+    res = analyse_message(message)
+    categories = {f.category for f in res.findings}
+    assert categories == {Category.URGENCY, Category.IMPERSONATION}
+    assert res.risk_band is RiskBand.REVIEW
+
+
+def test_duplicate_and_same_category_findings_cannot_inflate_risk_band() -> None:
+    def finding(category: Category, severity: Severity, rule_id: str) -> Finding:
+        return Finding(
+            id="x",
+            rule_id=rule_id,
+            category=category,
+            severity=severity,
+            title="t",
+            evidence_text="e",
+            evidence_source=EvidenceSource.ORIGINAL,
+            explanation="x",
+            observation_kind=ObservationKind.HEURISTIC,
+            source=FindingSource.DETERMINISTIC,
+        )
+
+    # 10 duplicate findings of the same high-severity rule
+    duplicates = [
+        finding(Category.URGENCY, Severity.HIGH, "A_ACCOUNT_LOCK")
+        for _ in range(10)
+    ]
+    assert assign_risk_band(duplicates) is RiskBand.REVIEW
+
+    # Multiple distinct findings within the same category
+    same_category = [
+        finding(Category.URL, Severity.HIGH, "E_IP_HOST"),
+        finding(Category.URL, Severity.MEDIUM, "E_UNUSUAL_PORT"),
+        finding(Category.URL, Severity.LOW, "E_DEFANGED_URL"),
+    ]
+    assert assign_risk_band(same_category) is RiskBand.REVIEW
+
+    # Multiple LOW severity findings across 3 categories do not jump to HIGH_CONCERN
+    low_findings = [
+        finding(Category.URGENCY, Severity.LOW, "A_LOW"),
+        finding(Category.URL, Severity.LOW, "E_LOW"),
+        finding(Category.FORMATTING, Severity.LOW, "F_LOW"),
+    ]
+    assert assign_risk_band(low_findings) is RiskBand.REVIEW
+
+
+def test_independent_categories_with_high_severity_reach_high_concern() -> None:
+    def finding(category: Category, severity: Severity, rule_id: str) -> Finding:
+        return Finding(
+            id="x",
+            rule_id=rule_id,
+            category=category,
+            severity=severity,
+            title="t",
+            evidence_text="e",
+            evidence_source=EvidenceSource.ORIGINAL,
+            explanation="x",
+            observation_kind=ObservationKind.HEURISTIC,
+            source=FindingSource.DETERMINISTIC,
+        )
+
+    # Independent: Urgency (HIGH) + Credential (HIGH)
+    combo1 = [
+        finding(Category.URGENCY, Severity.HIGH, "A_ACCOUNT_LOCK"),
+        finding(Category.CREDENTIAL, Severity.HIGH, "B_PASSWORD"),
+    ]
+    assert assign_risk_band(combo1) is RiskBand.HIGH_CONCERN
+
+    # Independent: Urgency (HIGH) + URL (MEDIUM)
+    combo2 = [
+        finding(Category.URGENCY, Severity.HIGH, "A_ACCOUNT_LOCK"),
+        finding(Category.URL, Severity.MEDIUM, "E_UNUSUAL_PORT"),
+    ]
+    assert assign_risk_band(combo2) is RiskBand.HIGH_CONCERN
+
+    # Correlated Impersonation + Urgency + Independent URL vector
+    combo3 = [
+        finding(Category.IMPERSONATION, Severity.MEDIUM, "D_IMPERSONATION"),
+        finding(Category.URGENCY, Severity.HIGH, "A_ACCOUNT_LOCK"),
+        finding(Category.URL, Severity.MEDIUM, "E_IP_HOST"),
+    ]
+    assert assign_risk_band(combo3) is RiskBand.HIGH_CONCERN
+
+
 def test_model_independent_no_llm_imports() -> None:
     root = ROOT / "scamsentry"
     forbidden = ("openai", "anthropic", "transformers", "llama", "gemini", "httpx", "requests")

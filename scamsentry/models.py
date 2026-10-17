@@ -122,11 +122,13 @@ class AnalysisResult:
     limitations: tuple[str, ...] = STANDARD_LIMITATIONS
     schema_version: str = SCHEMA_VERSION
     risk_policy: str = (
-        "LOW_CONCERN if zero findings; HIGH_CONCERN if two or more independent "
-        "categories each have at least one MEDIUM/HIGH finding and at least one "
-        "HIGH finding exists; otherwise REVIEW if any finding; INCONCLUSIVE if "
-        "analysis failed or is too incomplete. Repeated matches of the same rule "
-        "do not inflate the band. Invalid input is an error, not a risk band."
+        "Heuristic triage policy (not calibrated probability or proof of fraud): "
+        "LOW_CONCERN if zero findings; HIGH_CONCERN requires at least two genuinely "
+        "independent categories with at least one HIGH finding (correlated pairs such as "
+        "brand impersonation derived solely from urgency do not count as independent); "
+        "otherwise REVIEW if any finding is present; INCONCLUSIVE if analysis failed or "
+        "was incomplete. Duplicate findings and repeated matches within the same category "
+        "do not inflate the risk band. Invalid input is an error, not a risk band."
     )
     notes: tuple[str, ...] = field(default_factory=tuple)
 

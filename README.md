@@ -1,8 +1,8 @@
-# ScamSentry AI (Stage 1)
+# ScamSentry AI
 
-Deterministic, offline analysis of untrusted message text. The engine extracts indicators, inspects embedded URLs **without contacting them**, and returns structured evidence. It distinguishes what was observed from what was inferred. A finding is **not** proof that a message is a scam.
+ScamSentry analyzes untrusted message text in three separate stages. Stage 1 deterministically extracts indicators, inspects embedded URLs **without contacting them**, and returns structured evidence. Optional Stage 2 uses a local open-weight model to interpret context and intent. Stage 3 validates and fuses those outputs deterministically into a separate risk band and defensive recommendations. A finding or model interpretation is **not** proof that a message is a scam.
 
-Stage 1 is independent of every LLM provider. Stage 2 can add a local open-weight model (for example Gemma 4) without changing the Stage 1 `Finding` / `AnalysisResult` interfaces (`source="deterministic"` today; `source="model"` later).
+Stage 1 is independent of every LLM provider and remains authoritative for findings and its original heuristic risk band. Stage 2 is opt-in and does not change Stage 1 findings. Stage 3 is deterministic and treats Stage 2 as context only; it does not require a cloud API or Python runtime dependency.
 
 This is a **prototype**, not a substitute for security verification, fraud investigation, or incident response.
 
@@ -69,6 +69,30 @@ python -m scamsentry.cli analyze --file examples/suspicious_message.txt --json
 
 Human-readable output omits the original message by default for privacy (pass `--include-message` to display it). JSON mode outputs machine-readable data to `stdout`, while status and errors go to `stderr`. Non-zero exit codes are returned for invalid input or file errors without exposing Python tracebacks.
 
+Stage 2 uses an already-installed Ollama model and never downloads model weights:
+
+```bash
+# Install Ollama separately, then explicitly install the model you want:
+ollama pull gemma3:4b
+
+# Stage 1 plus local model interpretation (default model, 120-second timeout):
+scamsentry analyze --file examples/suspicious_message.txt --ai
+
+# Stage 1 plus deterministic Stage 3 decision, without a model:
+scamsentry analyze --file examples/suspicious_message.txt --decision --json
+
+# Select a different installed model and timeout:
+scamsentry analyze --text "Your account is suspended." --ai \
+  --ai-model gemma3:4b --ai-timeout 180 --json
+```
+
+If Ollama or the selected model is unavailable, Stage 1 is still returned and `ai_analysis.status` is `unavailable` in JSON. See the [CLI guide](docs/cli.md) for platform-specific instructions and the AI output contract.
+
+Stage 3 runs with `--decision` or automatically alongside `--ai`. It adds a
+separate `decision` object without changing Stage 1 or Stage 2 outputs. Review
+the [versioned risk policy](docs/risk_policy.md) for fusion rules and
+recommendation behavior.
+
 Library API:
 
 ```python
@@ -93,24 +117,33 @@ Recognised defanging is limited to patterns such as `hxxp` / `hxxps`, `example[.
 
 ## Risk bands
 
-Bands are a transparent rule-based policy, **not** a calibrated probability and **not** verified reputation.
+Bands are a transparent heuristic triage policy, **not** a calibrated probability, and **never** conclusive proof of fraud.
 
 | Band | Meaning |
 |------|---------|
 | `LOW_CONCERN` | No implemented check fired. **Not** proven safe. |
-| `REVIEW` | At least one finding, but the HIGH_CONCERN rule did not apply. |
-| `HIGH_CONCERN` | At least two independent categories each have a MEDIUM or HIGH finding, and at least one HIGH finding exists. |
+| `REVIEW` | At least one finding present, but insufficient independent vectors for high concern. Correlated indicators (such as brand impersonation derived solely from urgency) and multiple findings within the same category remain in REVIEW. |
+| `HIGH_CONCERN` | At least two genuinely independent categories each have a MEDIUM or HIGH finding, and at least one HIGH finding exists (e.g. Urgency + Credential request, or Urgency + Suspicious URL). |
 | `INCONCLUSIVE` | Analysis failed or is too incomplete (not used for a normal complete Stage 1 run). |
 
-Repeated matches of the same rule do not inflate the band. Invalid input is an error, not a risk band. Missing Stage 2 model output is not a safety signal.
+Repeated matches of the same rule and correlated cues do not inflate the band. Invalid input is an error, not a risk band. Missing Stage 2 model output is not a safety signal.
 
 ## Privacy and network
 
 - Analysis performs **no DNS, HTTP, redirects, JavaScript, metadata, or reputation lookups**.
 - `urllib.parse` and `ipaddress` are used locally. `urllib.request` is not used.
 - Do not log full messages by default. Human CLI truncates evidence spans; JSON may contain the full original message.
+- With `--ai`, the message and selected Stage 1 context are sent to the local Ollama CLI through stdin; inference and any runtime logging are governed by the local Ollama installation.
 
 Offline URL inspection **cannot** establish whether a remote site is currently malicious.
+
+## Documentation
+
+- [Architecture and data flow](docs/architecture.md)
+- [Installation and CLI usage](docs/cli.md)
+- [Analysis methodology](docs/methodology.md)
+- [Stage 3 risk policy](docs/risk_policy.md)
+- [Limitations and safe use](docs/limitations.md)
 
 ## Testing & Cross-Platform Verification
 
@@ -158,7 +191,7 @@ To verify this codebase on Windows 10/11 without modifying any source code:
 
 ### Tested Platform Disclosure
 - **Directly Executed Platform**: Linux (x86_64, Python 3.14.7).
-- **Windows & macOS Compatibility**: Ensured via strict compliance with standard library abstractions (`pathlib.Path` for path resolution, explicit UTF-8 encoding across all text operations, universal newline handling, absence of shell execution, and zero platform-specific binaries or APIs).
+- **CI coverage configured**: `.github/workflows/ci.yml` includes Ubuntu, Windows, and macOS with Python 3.11–3.13. No CI workflow result was available during this implementation, so those platforms are not reported as verified here.
 
 
 ## Example outputs

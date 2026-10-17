@@ -118,3 +118,38 @@ def test_misleading_brand_subdomain() -> None:
     findings_good = findings_for_url(good_urls[0])
     assert not any(item.rule_id == "E_MISLEADING_HOST" for item in findings_good)
 
+
+def test_invalid_port_handled_and_flagged() -> None:
+    from scamsentry.url_checks import findings_for_url
+    for url_str in ["http://example.com:invalid/path", "http://example.com:999999/path"]:
+        urls = extract_urls(f"Check this link: {url_str}")
+        assert len(urls) == 1
+        item = urls[0]
+        assert item.parse_ok is False
+        assert item.parse_error == "malformed_port"
+        findings = findings_for_url(item)
+        assert any(f.rule_id == "E_MALFORMED_URL" for f in findings)
+
+
+def test_malformed_bracketed_host() -> None:
+    from scamsentry.url_checks import findings_for_url
+    urls = extract_urls("Click here: http://[not_an_ip_host]/login")
+    assert len(urls) == 1
+    item = urls[0]
+    assert item.parse_ok is False
+    assert item.parse_error == "malformed_bracketed_host"
+    findings = findings_for_url(item)
+    assert any(f.rule_id == "E_MALFORMED_URL" for f in findings)
+
+
+def test_malformed_ipv6_url() -> None:
+    from scamsentry.url_checks import findings_for_url
+    urls = extract_urls("Connect to http://[2001:xyz::1]/admin")
+    assert len(urls) == 1
+    item = urls[0]
+    assert item.parse_ok is False
+    assert item.parse_error == "malformed_bracketed_host"
+    findings = findings_for_url(item)
+    assert any(f.rule_id == "E_MALFORMED_URL" for f in findings)
+
+

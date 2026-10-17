@@ -7,7 +7,7 @@ from scamsentry.rules import apply_impersonation_gate, run_text_rules
 
 def _run(text: str):
     norm = normalise_message(text)
-    return apply_impersonation_gate(run_text_rules(text, norm.normalised))
+    return apply_impersonation_gate(run_text_rules(text, norm.normalised, norm.index_map))
 
 
 def test_benign_account_payment_urgent_context() -> None:
@@ -130,4 +130,31 @@ def test_cross_rule_identical_span_deduplication() -> None:
     assert len(deduped) == 1
     assert deduped[0].rule_id == "RULE_B"
     assert deduped[0].severity == Severity.HIGH
+
+
+def test_repeated_phrases_with_invisible_unicode_offsets() -> None:
+    text = (
+        "First notice: your account will be suspended today. "
+        "Second notice: your account will be sus\u200bpended later."
+    )
+    findings = _run(text)
+    locks = [f for f in findings if f.rule_id == "A_ACCOUNT_LOCK"]
+    assert len(locks) == 2
+
+    # First occurrence
+    first = locks[0]
+    assert first.start_offset is not None and first.end_offset is not None
+    assert text[first.start_offset : first.end_offset] == "your account will be suspended"
+    assert first.start_offset < 50
+
+    # Second occurrence has invisible character
+    second = locks[1]
+    assert second.start_offset is not None and second.end_offset is not None
+    assert text[second.start_offset : second.end_offset] == "your account will be sus\u200bpended"
+    assert "\u200b" in second.evidence_text
+    assert second.start_offset > 50
+
+    # Offsets must be distinct and non-overlapping
+    assert first.end_offset < second.start_offset
+
 

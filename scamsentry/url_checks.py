@@ -305,6 +305,26 @@ def parse_url_candidate(original_text: str, recognised_defanged: bool) -> Extrac
 
     try:
         parsed = urlparse(to_parse)
+    except ValueError as exc:
+        is_bracket = "[" in to_parse or "]" in to_parse or "IPv4 or IPv6" in str(exc)
+        err_type = "malformed_bracketed_host" if is_bracket else "malformed_url"
+        return ExtractedURL(
+            original_text=original_text,
+            normalised_candidate=candidate,
+            start=0,
+            end=0,
+            recognised_defanged=recognised_defanged,
+            parse_ok=False,
+            scheme=None,
+            host=None,
+            port=None,
+            path="",
+            query="",
+            userinfo=None,
+            host_is_ip=False,
+            parse_error=err_type,
+            notes=(f"URL could not be parsed safely: {exc}",),
+        )
     except Exception as exc:  # pragma: no cover - urllib.parse is generally safe
         return ExtractedURL(
             original_text=original_text,
@@ -326,12 +346,13 @@ def parse_url_candidate(original_text: str, recognised_defanged: bool) -> Extrac
 
     scheme = (parsed.scheme or "").lower() or None
     host = parsed.hostname
-    port: int | None
+    port: int | None = None
+    malformed_port = False
     try:
         port = parsed.port
-    except ValueError:
-        port = None
-        notes.append("port value is not a valid integer")
+    except ValueError as exc:
+        malformed_port = True
+        notes.append(f"port value is not a valid integer: {exc}")
 
     userinfo = None
     if parsed.username is not None:
@@ -348,9 +369,15 @@ def parse_url_candidate(original_text: str, recognised_defanged: bool) -> Extrac
                 notes.append(f"brand-like subdomain {brand!r} on unrelated registrable domain")
 
     parse_ok = bool(scheme and (host or scheme in RISKY_SCHEMES or parsed.path))
-    if not host and scheme in HTTP_SCHEMES:
+    if malformed_port:
         parse_ok = False
+        parse_error = "malformed_port"
+    elif not host and scheme in HTTP_SCHEMES:
+        parse_ok = False
+        parse_error = "missing_host"
         notes.append("HTTP(S) URL missing host")
+    else:
+        parse_error = None if parse_ok else "incomplete_parse"
 
     return ExtractedURL(
         original_text=original_text,
@@ -366,7 +393,7 @@ def parse_url_candidate(original_text: str, recognised_defanged: bool) -> Extrac
         query=parsed.query or "",
         userinfo=userinfo,
         host_is_ip=host_is_ip,
-        parse_error=None if parse_ok else "incomplete_parse",
+        parse_error=parse_error,
         notes=tuple(notes),
     )
 
@@ -455,6 +482,22 @@ def findings_for_url(extracted: ExtractedURL) -> list[Finding]:
                 explanation=(
                     f"Explicit scheme {extracted.scheme!r} is not ordinary HTTP(S). "
                     "The analyser does not execute or fetch the target."
+                ),
+                kind=ObservationKind.DIRECT,
+            )
+        )
+
+    if extracted.parse_error in {"malformed_port", "malformed_bracketed_host"}:
+        err_desc = extracted.parse_error.replace("_", " ")
+        findings.append(
+            _url_finding(
+                rule_id="E_MALFORMED_URL",
+                severity=Severity.MEDIUM,
+                title="Malformed URL component",
+                extracted=extracted,
+                explanation=(
+                    f"The candidate URL contains a syntactically invalid component ({err_desc}). "
+                    "Partially parsed candidates are distinguished from valid links and not fetched."
                 ),
                 kind=ObservationKind.DIRECT,
             )
